@@ -93,8 +93,11 @@ modified_files = {}
 # Function to replace names and addresses consistently using LLM
 def replace_sensitive_info(text, mapping):
     # Ask the LLM to identify names and addresses in the text and suggest replacements
-    prompt = f'"{text}"\n Identify names and addresses in the text and suggest replacements. Do not suggest replacements for anything other than names or addresses. Do not explain or discuss, just reply with the suggestions in JSON format, e.g., {{"Alex": "Robert", "Thomas": "Johnny", "original": "replacement" ...}}. '
+    prompt = f'"{text}"\n Identify names of people and addresses in the text and suggest replacements. Do not suggest replacements for anything other than names of people or addresses. Do not explain or discuss, just reply with the suggestions in JSON format, e.g., {{"Alex": "Robert", "Thomas": "Johnny", "original": "replacement" ...}}. '
     response = llm(prompt)
+
+
+
     
     # Try to parse the JSON response, retry if necessary
     suggested_mappings = {}
@@ -103,8 +106,20 @@ def replace_sensitive_info(text, mapping):
         try:
             suggested_mappings = json.loads(response)
             if isinstance(suggested_mappings, dict):
+                # just ask it again to make sure?
+                keys = '","'.join(suggested_mappings.keys())
+                #filtered_keys = llm(f"Filter out words that are not people names or addresses from [\"{keys}\"]. Do not explain or discuss anything, only respond with a JSON array of names or addresses, e.g., [\"John\", \"Bryan\",...]", True, True)
+                filtered_keys = llm(f"Return only a JSON array of people names or addresses from the input list: [\"{keys}\"]. No explanations or additional text, only respond with the JSON array.", True, True)
+
+                filtered_keys = json.loads(filtered_keys)
+                actual = {}
+                for k in filtered_keys:
+                    if k in suggested_mappings:
+                        actual[k] = suggested_mappings[k]
+                suggested_mappings = actual
+
                 break
-        except json.JSONDecodeError as e:
+        except Exception as e:
             print(e)
             response = llm(prompt)
             tries += 1
@@ -129,7 +144,7 @@ def replace_sensitive_info(text, mapping):
 
 def check_for_unsafe(text):
     prompt = f'Is the following text something that deals with extremely harmful content:"{text}"? If it\'s safe, reply with {{"safe": "Y", "replacement_text": ""}}. If it\'s unsafe, rewrite it so that it\'s safe and reply with {{"safe": "N", "replacement_text": "detailed replacement text"}}. Do not discuss, just reply with a JSON object.`'
-    response = llm(prompt, True, True)
+    response = llm(prompt)
     tries = 0
     while tries < 5:
         tries += 1
@@ -141,7 +156,7 @@ def check_for_unsafe(text):
                 print('one was missing')
         except json.JSONDecodeError as e:
             print(e)
-            response = llm(prompt, True, True)
+            response = llm(prompt)
     return ""
     
 for file_path in matching_files:
