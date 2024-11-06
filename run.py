@@ -58,7 +58,7 @@ try:
         output = output.replace('`', '')
 
         # Use hardcoded regex pattern
-        output = '2023.*'
+        output = '[12].*'
         pattern = re.compile(output)
 
         # Filter files and directories that match the regex pattern
@@ -96,7 +96,7 @@ if not filteredParagraphs:
 
             for paragraph in paragraphs:
                 ask = paragraph + filterPrompt
-                answer = llm(ask, False)
+                answer = llm(ask, True)
 
                 tries = 0
                 while answer[0] != 'Y' and answer[0] != 'N':
@@ -114,10 +114,12 @@ if not filteredParagraphs:
     with open(progress_file, 'w') as f:
         json.dump(saved_progress, f)
 
+print(f"we have {len(filteredParagraphs)} filtered paragraphs")
+
 # Step 2, group
 def getGroupPrompt(options):
     # this prompt is iffy, it's too biased towards choosing existing spots
-    groupPrompt = f"\n\nWhich restaurant is this text talking about? " + f"It's more likely that the restaurant referred to in this text is not something seen before. Choose carefully if two restaurants are mentioned. Only choose an existing restaurant name option if you're absolutely sure the text is talking about the same restaurant. Do not discuss, just reply with the name of the restaurant in JSON format {{\"name\": \"[name]\", \"explanation\": \"[explanation]\"}}. If you do not format it in JSON, I will have to ask again."
+    groupPrompt = f"\n\nWhich restaurant is this text talking about? " + f"The name of the restaurant should be mentioned in the text. Choose carefully if two restaurants are mentioned. Only choose an existing restaurant name option if you're absolutely sure the text is talking about the same restaurant. Do not discuss, just reply with the name of the restaurant in JSON format {{\"name\": \"[name]\", \"explanation\": \"[explanation of why the restaurant name was chosen from the text]\"}}. If you do not format it in JSON, I will have to ask again."
     "Previously seen restaurants: [{', '.join(options)}]. "
     return groupPrompt
 
@@ -126,7 +128,7 @@ groups = saved_progress.get(session_key, {}).get("groups", {})
 if not groups:
     for paragraph in filteredParagraphs:
         ask = paragraph + getGroupPrompt(groups.keys())
-        answer = llm(ask, True, True)
+        answer = llm(ask, True)
 
         tries = 0
         while True:
@@ -141,10 +143,10 @@ if not groups:
                     break
             except json.JSONDecodeError as e:
                 print("Invalid JSON syntax:", e)
-                answer = llm(ask, True)
+                answer = llm(ask, False)
 
         restaurant_name = formattedAnswer.get("name")
-        if restaurant_name:
+        if restaurant_name and restaurant_name != "None":
             if restaurant_name not in groups:
                 # never mind, don't try to spell correct or anything. it just doesn't work
                 groups[restaurant_name] = []
@@ -211,9 +213,13 @@ ranked = saved_progress.get(session_key, {}).get("ranked", {})
 def compare_text(item1, item2):
     ask = item1[0] + ": " + item1[1] + "\n\n" + item2[0] + ": " + item2[1] + rank_prompt1 + item1[0] + "' or '" + item2[0] + rank_prompt2
     answer = llm(ask, False)
-    while answer != item1[0] and answer != item2[0]:
+    tries = 0
+    while answer != item1[0] and answer != item2[0] and tries < 10:
         formattedAnswer = ''
         while True:
+            tries += 1
+            if (tries > 10):
+                formattedAnswer = {"name": item1[0]}
             try:
                 formattedAnswer = json.loads(answer)
                 if "name" in formattedAnswer:
@@ -229,6 +235,9 @@ def compare_text(item1, item2):
     if answer == item2[0]:
         print(answer + " was chosen over " + item1[0])
         return -1
+
+    # default to first choice
+    return 0
 
 if not ranked:
     ranked = sorted(summarized_groups.items(), key=cmp_to_key(compare_text))
