@@ -48,13 +48,6 @@ def get_hash_key(prompt, matching_files):
     combined = prompt + "".join(matching_files)
     return hashlib.md5(combined.encode()).hexdigest()
 
-# Check if there is a saved progress file
-progress_file = "./prepared/progress.json"
-saved_progress = {}
-if os.path.exists(progress_file):
-    with open(progress_file, 'r') as f:
-        saved_progress = json.load(f)
-
 # Load saved name/address mapping if available
 name_address_mapping = {}
 if os.path.exists(mapping_file_path):
@@ -95,12 +88,12 @@ print(f"Analyzing {len(matching_files)} journal files")
 session_key = get_hash_key("SensitiveContentFilter", matching_files)
 
 # Load saved progress if available
-modified_files = saved_progress.get(session_key, {}).get("modified_files", {})
+modified_files = {}
 
 # Function to replace names and addresses consistently using LLM
 def replace_sensitive_info(text, mapping):
     # Ask the LLM to identify names and addresses in the text and suggest replacements
-    prompt = f"\"{text}\"\n Identify all names and addresses (but not pronouns like I or his) in the text and suggest replacements. Do not change city names. The replacements should be very different from the originals. The keys in the JSON should only be names and addresses that appear in the text, and the values should all be strings. Do not explain or discuss, just reply with the suggestions in JSON format, e.g., {{'Alex': 'Robert', 'Thomas': 'Johnny', ...}}. "
+    prompt = f'"{text}"\n Identify all names and addresses (but not pronouns like I or his) in the text and suggest replacements. Do NOT change city or country names. The replacements should be very different from the originals. The keys in the JSON should only be names and addresses that appear in the text, and the values should all be strings. Do not explain or discuss, just reply with the suggestions in JSON format, e.g., {{"Alex": "Robert", "Thomas": "Johnny", ...}}. '
     response = llm(prompt)
     
     # Try to parse the JSON response, retry if necessary
@@ -137,79 +130,80 @@ def replace_sensitive_info(text, mapping):
     return text
 
 def check_for_unsafe(text):
-    prompt = f"\"{text}\"\n Considering that I wrote this text, is this something that deals with unsafe content or that I wouldn't want shared? Do not discuss, just reply with S if it's safe or U if it's unsafe."
+    prompt = f'"{text}"\n Is this something that deals with harmful content? If it\'s safe, reply with {{"safe": "S", "replacement_text": []}}. If it\'s unsafe, rephrase it so that it\'s safe and reply with {{"safe": "U", "replacement_text": "replacement text"}}. Do not discuss, just reply with a JSON object.`'
     response = llm(prompt, True, True)
     tries = 0
     while tries < 5:
         tries += 1
-        if response[0] != 'S' and response[0] != 'U':
+        try:
+            response_json = json.loads(response)
+            if 'safe' in response_json and ('replacement_text' in response_json):
+                return text if response_json['safe'] == 'S' else response_json['replacement_text']
+            else:
+                print('one was missing')
+        except json.JSONDecodeError as e:
+            print(e)
             response = llm(prompt, True, True)
+    return text
     
-    if response[0] == 'S':
-        return text
-    return ''
-    
-if not modified_files:
-    for file_path in matching_files:
-        with open(journal_dir + '/' + file_path, 'r') as file:
-            content = file.read()
-            date = os.path.basename(file_path).replace(".txt", "")
-            print(f"reading {os.path.basename(file_path)}")
+for file_path in matching_files:
+    with open(journal_dir + '/' + file_path, 'r') as file:
+        content = file.read()
+        date = os.path.basename(file_path).replace(".txt", "")
+        print(f"reading {os.path.basename(file_path)}")
 
-            # Split content into paragraphs
-            paragraphs = content.split("\n\n")
-            modified_paragraphs = []
+        # Split content into paragraphs
+        paragraphs = content.split("\n\n")
+        modified_paragraphs = []
 
-            for paragraph in paragraphs:
-                # Replace sensitive information using LLM
-                print('original', paragraph)
-                modified_paragraph = replace_sensitive_info(paragraph, name_address_mapping)
-                # try commenting this out
-                modified_paragraph = check_for_unsafe(modified_paragraph)
-                print('modified', modified_paragraph)
-                modified_paragraphs.append(modified_paragraph)
+        for paragraph in paragraphs:
+            # Replace sensitive information using LLM
+            print('original', paragraph)
+            modified_paragraph = replace_sensitive_info(paragraph, name_address_mapping)
+            # try commenting this out
+            modified_paragraph = check_for_unsafe(modified_paragraph)
+            print('modified', modified_paragraph)
+            modified_paragraphs.append(modified_paragraph)
 
-            # Save modified paragraphs as a text file
-            modified_content = "\n\n".join(modified_paragraphs)
-            output_file_path = os.path.join(output_dir, f"{date}-modified.txt")
-            with open(output_file_path, 'w') as output_file:
-                output_file.write(modified_content)
+        # Save modified paragraphs as a text file
+        modified_content = "\n\n".join(modified_paragraphs)
+        output_file_path = os.path.join(output_dir, f"{date}-modified.txt")
+        with open(output_file_path, 'w') as output_file:
+            output_file.write(modified_content)
 
-            # Keep track of modified files
-            modified_files[date] = output_file_path
+        # Keep track of modified files
+        modified_files[date] = output_file_path
 
-    # Save progress to progress file
-    saved_progress[session_key] = {"modified_files": modified_files}
-    with open(progress_file, 'w') as f:
-        json.dump(saved_progress, f)
-
-    # Save name/address mapping to file
-    with open(mapping_file_path, 'w') as f:
-        json.dump(name_address_mapping, f, indent=4)
+# Save name/address mapping to file
+with open(mapping_file_path, 'w') as f:
+    json.dump(name_address_mapping, f, indent=4)
 
 print(f"Modified files saved in '{output_dir}'")
 
-# Connect to DALL-E to generate images for each modified entry
-for date, modified_file_path in modified_files.items():
-    with open(modified_file_path, 'r') as modified_file:
-        modified_entry = json.load(modified_file)["content"]
-        # Create a prompt to generate an image based on the content
-        image_prompt = f"Generate a photo based on the following content. Choose a style that you think best suits the text: \n{modified_entry}"
-        # try commenting this out
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=image_prompt,
-            size="1024x1792",
-            quality="hd",
-            style="natural",
-            n=1,
-        )
-        image_url = response.data[0].url
-        image_path = os.path.join(aipics_dir, f"{date}.txt.png")
-        # Download and save the image to the aipics directory
-        # Download and save the image to the aipics directory
-        image_data = requests.get(image_url).content
-        with open(image_path, 'wb') as image_file:
-            image_file.write(image_data)
+x = False
 
-print(f"Images saved in '{aipics_dir}'")
+if x:
+    # Connect to DALL-E to generate images for each modified entry
+    for date, modified_file_path in modified_files.items():
+        with open(modified_file_path, 'r') as modified_file:
+            modified_entry = modified_file.read()
+            # Create a prompt to generate an image based on the content
+            image_prompt = f"Generate a photo based on the following content. Choose a style that you think best suits the text: \n{modified_entry}"
+            # try commenting this out
+            response = client.images.generate(
+                model="dall-e-3",
+                prompt=image_prompt,
+                size="1024x1024",
+                quality="hd",
+                style="vivid",
+                n=1,
+            )
+            image_url = response.data[0].url
+            image_path = os.path.join(aipics_dir, f"{date}.txt.png")
+            # Download and save the image to the aipics directory
+            # Download and save the image to the aipics directory
+            image_data = requests.get(image_url).content
+            with open(image_path, 'wb') as image_file:
+                image_file.write(image_data)
+
+    print(f"Images saved in '{aipics_dir}'")
