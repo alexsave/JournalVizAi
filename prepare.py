@@ -69,7 +69,7 @@ try:
         output = output.replace('`', '')
 
         # Use hardcoded regex pattern
-        output = '[1].*'
+        output = '[12].*'
         pattern = re.compile(output)
 
         # Filter files and directories that match the regex pattern
@@ -93,7 +93,7 @@ modified_files = {}
 # Function to replace names and addresses consistently using LLM
 def replace_sensitive_info(text, mapping):
     # Ask the LLM to identify names and addresses in the text and suggest replacements
-    prompt = f'"{text}"\n Identify all names and addresses (but not pronouns like I or his) in the text and suggest replacements. Do NOT change city or country names. The replacements should be very different from the originals. The keys in the JSON should only be names and addresses that appear in the text, and the values should all be strings. Do not explain or discuss, just reply with the suggestions in JSON format, e.g., {{"Alex": "Robert", "Thomas": "Johnny", ...}}. '
+    prompt = f'"{text}"\n Identify names and addresses in the text and suggest replacements. Do not suggest replacements for anything other than names or addresses. Do not explain or discuss, just reply with the suggestions in JSON format, e.g., {{"Alex": "Robert", "Thomas": "Johnny", "original": "replacement" ...}}. '
     response = llm(prompt)
     
     # Try to parse the JSON response, retry if necessary
@@ -113,15 +113,13 @@ def replace_sensitive_info(text, mapping):
         print(f"Skipping paragraph due to JSON parsing issues: {text[:50]}...")
         return text
 
+    # this is iffy
     # Start with first mapping to stay consistent
     for original, suggested in mapping.items():
         text = text.replace(original, suggested)
 
     # Update the name/address mapping and replace in the text
     for original, suggested in suggested_mappings.items():
-        # new mapping not already in "mapping", otherwise it would've been replaced
-        # if it was already replaced, don't bother replacing again
-        # if it's a dict or something, ignore it for now
         if isinstance(suggested, str) and original in text:
             if original not in mapping:
                 mapping[original] = suggested
@@ -130,7 +128,7 @@ def replace_sensitive_info(text, mapping):
     return text
 
 def check_for_unsafe(text):
-    prompt = f'"{text}"\n Is this something that deals with harmful content? If it\'s safe, reply with {{"safe": "S", "replacement_text": []}}. If it\'s unsafe, rephrase it so that it\'s safe and reply with {{"safe": "U", "replacement_text": "replacement text"}}. Do not discuss, just reply with a JSON object.`'
+    prompt = f'Is the following text something that deals with extremely harmful content:"{text}"? If it\'s safe, reply with {{"safe": "Y", "replacement_text": ""}}. If it\'s unsafe, rewrite it so that it\'s safe and reply with {{"safe": "N", "replacement_text": "detailed replacement text"}}. Do not discuss, just reply with a JSON object.`'
     response = llm(prompt, True, True)
     tries = 0
     while tries < 5:
@@ -138,13 +136,13 @@ def check_for_unsafe(text):
         try:
             response_json = json.loads(response)
             if 'safe' in response_json and ('replacement_text' in response_json):
-                return text if response_json['safe'] == 'S' else response_json['replacement_text']
+                return text if response_json['safe'] == 'Y' else response_json['replacement_text']
             else:
                 print('one was missing')
         except json.JSONDecodeError as e:
             print(e)
             response = llm(prompt, True, True)
-    return text
+    return ""
     
 for file_path in matching_files:
     with open(journal_dir + '/' + file_path, 'r') as file:
@@ -174,36 +172,8 @@ for file_path in matching_files:
         # Keep track of modified files
         modified_files[date] = output_file_path
 
-# Save name/address mapping to file
-with open(mapping_file_path, 'w') as f:
-    json.dump(name_address_mapping, f, indent=4)
+    # Save name/address mapping to file
+    with open(mapping_file_path, 'w') as f:
+        json.dump(name_address_mapping, f, indent=4)
 
 print(f"Modified files saved in '{output_dir}'")
-
-x = False
-
-if x:
-    # Connect to DALL-E to generate images for each modified entry
-    for date, modified_file_path in modified_files.items():
-        with open(modified_file_path, 'r') as modified_file:
-            modified_entry = modified_file.read()
-            # Create a prompt to generate an image based on the content
-            image_prompt = f"Generate a photo based on the following content. Choose a style that you think best suits the text: \n{modified_entry}"
-            # try commenting this out
-            response = client.images.generate(
-                model="dall-e-3",
-                prompt=image_prompt,
-                size="1024x1024",
-                quality="hd",
-                style="vivid",
-                n=1,
-            )
-            image_url = response.data[0].url
-            image_path = os.path.join(aipics_dir, f"{date}.txt.png")
-            # Download and save the image to the aipics directory
-            # Download and save the image to the aipics directory
-            image_data = requests.get(image_url).content
-            with open(image_path, 'wb') as image_file:
-                image_file.write(image_data)
-
-    print(f"Images saved in '{aipics_dir}'")
