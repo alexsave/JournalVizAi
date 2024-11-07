@@ -11,6 +11,11 @@ from openai import OpenAI
 load_dotenv()
 client = OpenAI()
 
+from nltk.corpus import stopwords
+stop_words = set(stopwords.words('english'))
+for a in 'a b c d e f g h i j k l m n o p q r s t u v w x y z'.split(' '):
+    stop_words.add(a)
+
 def llm(prompt, log=False, user_log=False):
     output = ""
     if user_log:
@@ -131,14 +136,15 @@ def replace_sensitive_info(text, mapping):
     # this is iffy
     # Start with first mapping to stay consistent
     for original, suggested in mapping.items():
-        text = text.replace(original, suggested)
+        # Replace only if the original appears as a whole word (not surrounded by text)
+        text = re.sub(rf'\b{re.escape(original)}\b', suggested, text)
 
     # Update the name/address mapping and replace in the text
     for original, suggested in suggested_mappings.items():
-        if isinstance(suggested, str) and original in text:
+        if isinstance(suggested, str) and original in text and original.lower() not in stop_words:
             if original not in mapping:
                 mapping[original] = suggested
-            text = text.replace(original, mapping[original])
+            text = re.sub(rf'\b{re.escape(original)}\b', mapping[original], text)
 
     return text
 
