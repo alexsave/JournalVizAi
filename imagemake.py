@@ -19,7 +19,7 @@ modified_files = sorted(
     key=lambda x: os.path.getmtime(os.path.join(output_dir, x))
 )
 
-output = '.*-modified.txt'
+output = '(1|200).*-modified.txt'
 pattern = re.compile(output)
 
 # Filter files and directories that match the regex pattern

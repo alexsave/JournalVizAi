@@ -1,20 +1,25 @@
 import os
-import requests
 import sys
 import json
 from dotenv import load_dotenv
+import time
 import re
 import hashlib
 from ollama import generate
-from openai import OpenAI
 
 load_dotenv()
-client = OpenAI()
 
 from nltk.corpus import stopwords
 stop_words = set(stopwords.words('english'))
 for a in 'a b c d e f g h i j k l m n o p q r s t u v w x y z'.split(' '):
     stop_words.add(a)
+
+llm_replace_names = False
+max_tries = 4
+
+full_regex = r''
+
+
 
 def llm(prompt, log=False, user_log=False):
     output = ""
@@ -59,6 +64,9 @@ if os.path.exists(mapping_file_path):
     with open(mapping_file_path, 'r') as f:
         name_address_mapping = json.load(f)
 
+if not llm_replace_names:
+    full_regex = r'\b(' + '|'.join(re.escape(key) for key in name_address_mapping.keys()) + r')\b'
+
 try:
     files_and_dirs = sorted(
         os.listdir(journal_dir),
@@ -97,47 +105,50 @@ modified_files = {}
 
 # Function to replace names and addresses consistently using LLM
 def replace_sensitive_info(text, mapping):
+    # consider only replacing if the first char is uppercase
     # Ask the LLM to identify names and addresses in the text and suggest replacements
     prompt = f'"{text}"\n Identify names of people and addresses in the text and suggest replacements. Do not suggest replacements for anything other than names of people or addresses. Do not explain or discuss, just reply with the suggestions in JSON format, e.g., {{"Alex": "Robert", "Thomas": "Johnny", "original": "replacement" ...}}. '
     response = llm(prompt)
+    global full_regex
 
 
 
     
     # Try to parse the JSON response, retry if necessary
     suggested_mappings = {}
-    tries = 0
-    while tries < 5:
-        try:
-            suggested_mappings = json.loads(response)
-            if isinstance(suggested_mappings, dict):
-                # just ask it again to make sure?
-                keys = '","'.join(suggested_mappings.keys())
-                #filtered_keys = llm(f"Filter out words that are not people names or addresses from [\"{keys}\"]. Do not explain or discuss anything, only respond with a JSON array of names or addresses, e.g., [\"John\", \"Bryan\",...]", True, True)
-                filtered_keys = llm(f"Return only a JSON array of people names or addresses from the input list: [\"{keys}\"]. No explanations or additional text, only respond with the JSON array.", True, True)
+    # this is slow, so if you want to rerun it its best to flip it to false
+    if llm_replace_names:
+        tries = 0
+        while tries < max_tries:
+            try:
+                suggested_mappings = json.loads(response)
+                if isinstance(suggested_mappings, dict):
+                    # just ask it again to make sure?
+                    keys = '","'.join(suggested_mappings.keys())
+                    #filtered_keys = llm(f"Filter out words that are not people names or addresses from [\"{keys}\"]. Do not explain or discuss anything, only respond with a JSON array of names or addresses, e.g., [\"John\", \"Bryan\",...]", True, True)
+                    filtered_keys = llm(f"Return only a JSON array of people names or addresses from the input list: [\"{keys}\"]. No explanations or additional text, only respond with the JSON array.", True, True)
+    
+                    filtered_keys = json.loads(filtered_keys)
+                    actual = {}
+                    for k in filtered_keys:
+                        if k in suggested_mappings:
+                            actual[k] = suggested_mappings[k]
+                    suggested_mappings = actual
+    
+                    # we have to "reload" it from the mapping. this is kinda slow, but not as slow as LLM
+                    full_regex = r'\b(' + '|'.join(re.escape(key) for key in mapping.keys()) + r')\b'
+                    break
+            except Exception as e:
+                #print(e)
+                response = llm(prompt)
+                tries += 1
+            
 
-                filtered_keys = json.loads(filtered_keys)
-                actual = {}
-                for k in filtered_keys:
-                    if k in suggested_mappings:
-                        actual[k] = suggested_mappings[k]
-                suggested_mappings = actual
-
-                break
-        except Exception as e:
-            print(e)
-            response = llm(prompt)
-            tries += 1
+    text = re.sub(full_regex, lambda match: mapping.get(match.group(0), match.group(0)), text)
 
     if not isinstance(suggested_mappings, dict):
         print(f"Skipping paragraph due to JSON parsing issues: {text[:50]}...")
         return text
-
-    # this is iffy
-    # Start with first mapping to stay consistent
-    for original, suggested in mapping.items():
-        # Replace only if the original appears as a whole word (not surrounded by text)
-        text = re.sub(rf'\b{re.escape(original)}\b', suggested, text)
 
     # Update the name/address mapping and replace in the text
     for original, suggested in suggested_mappings.items():
@@ -152,7 +163,7 @@ def check_for_unsafe(text):
     prompt = f'Is the following text something that deals with extremely harmful content:"{text}"? If it\'s safe, reply with {{"safe": "Y", "replacement_text": ""}}. If it\'s unsafe, rewrite it so that it\'s safe and reply with {{"safe": "N", "replacement_text": "detailed replacement text"}}. Do not discuss, just reply with a JSON object.`'
     response = llm(prompt)
     tries = 0
-    while tries < 5:
+    while tries < max_tries:
         tries += 1
         try:
             response_json = json.loads(response)
@@ -161,12 +172,13 @@ def check_for_unsafe(text):
             else:
                 print('one was missing')
         except json.JSONDecodeError as e:
-            print(e)
+            #print(e)
             response = llm(prompt)
     return ""
     
 for file_path in matching_files:
     with open(journal_dir + '/' + file_path, 'r') as file:
+        start = time.time()
         content = file.read()
         date = os.path.basename(file_path).replace(".txt", "")
         print(f"reading {os.path.basename(file_path)}")
@@ -177,11 +189,11 @@ for file_path in matching_files:
 
         for paragraph in paragraphs:
             # Replace sensitive information using LLM
-            print('original', paragraph)
+            #print('original', paragraph)
             modified_paragraph = replace_sensitive_info(paragraph, name_address_mapping)
             # try commenting this out
             modified_paragraph = check_for_unsafe(modified_paragraph)
-            print('modified', modified_paragraph)
+            #print('modified', modified_paragraph)
             modified_paragraphs.append(modified_paragraph)
 
         # Save modified paragraphs as a text file
@@ -189,6 +201,9 @@ for file_path in matching_files:
         output_file_path = os.path.join(output_dir, f"{date}-modified.txt")
         with open(output_file_path, 'w') as output_file:
             output_file.write(modified_content)
+
+        end = time.time()
+        print(f"Time taken: {end-start} seconds for {date}")
 
         # Keep track of modified files
         modified_files[date] = output_file_path
@@ -198,3 +213,7 @@ for file_path in matching_files:
         json.dump(name_address_mapping, f, indent=4)
 
 print(f"Modified files saved in '{output_dir}'")
+
+
+# I want to add a final step where we look at name_address_mapping.json and 
+# sort by longest key, then go through everythign again
