@@ -14,12 +14,14 @@ aipics_dir = os.path.join('.', "aipics")
 if not os.path.exists(aipics_dir):
     os.makedirs(aipics_dir)
 
+done_pics = os.listdir(aipics_dir)
+
 modified_files = sorted(
     os.listdir(output_dir),
     key=lambda x: os.path.getmtime(os.path.join(output_dir, x))
 )
 
-output = '(1|200).*-modified.txt'
+output = '2020.*-modified.txt'
 pattern = re.compile(output)
 
 # Filter files and directories that match the regex pattern
@@ -32,9 +34,9 @@ for file_path in modified_files:
         modified_entry = modified_file.read()
         # Create a prompt to generate an image based on the content
         #image_prompt = "Generate a photo based on the following content. Choose a style that you think best suits the text: "
-        image_prompt = ""
+        image_prompt = "Capture the feeling of the content and compose it as a single image. Generate a photo based on the following content:"
 
-        max_prompt_length = 4000
+        max_prompt_length = 3900
         remaining = max_prompt_length - len(image_prompt)
 
         prompts = []
@@ -53,9 +55,16 @@ for file_path in modified_files:
             
 
         for i, prompt in enumerate(prompts):
+            image_file = f"{file_path}{i}.png"
+            # don't redo images, this should keep it much much faster on subsequent runs
+            if image_path in done_pics:
+                continue
+
+            image_path = os.path.join(aipics_dir, image_file)
+
             try:
                 # reate limit
-                time.sleep(12)
+                time.sleep(9)
                 # try commenting this out
                 response = client.images.generate(
                     model="dall-e-3",
@@ -67,7 +76,6 @@ for file_path in modified_files:
                 )
                 print(f"created image for {file_path}")
                 image_url = response.data[0].url
-                image_path = os.path.join(aipics_dir, f"{file_path}{i}.png")
                 # Download and save the image to the aipics directory
                 # Download and save the image to the aipics directory
                 image_data = requests.get(image_url).content

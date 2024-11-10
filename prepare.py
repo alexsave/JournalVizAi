@@ -43,11 +43,14 @@ output_dir = os.path.join('.', "prepared")
 aipics_dir = os.path.join('.', "aipics")
 mapping_file_path = os.path.join('.', "prepared", "name_address_mapping.json")
 
+
 # Create output directories if they don't exist
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 if not os.path.exists(aipics_dir):
     os.makedirs(aipics_dir)
+
+done_entries = os.listdir(output_dir)
 
 print(f"looking for journal entries in {journal_dir}")
 
@@ -82,7 +85,7 @@ try:
         output = output.replace('`', '')
 
         # Use hardcoded regex pattern
-        output = '[12].*'
+        output = '1.*'
         pattern = re.compile(output)
 
         # Filter files and directories that match the regex pattern
@@ -160,7 +163,7 @@ def replace_sensitive_info(text, mapping):
     return text
 
 def check_for_unsafe(text):
-    prompt = f'Is the following text something that deals with extremely harmful content:"{text}"? If it\'s safe, reply with {{"safe": "Y", "replacement_text": ""}}. If it\'s unsafe, rewrite it so that it\'s safe and reply with {{"safe": "N", "replacement_text": "detailed replacement text"}}. Do not discuss, just reply with a JSON object.`'
+    prompt = f'Is the following text something that deals with extremely harmful content:"{text}"? If it\'s safe, reply with {{"safe": "Y", "replacement_text": ""}}. If it\'s unsafe, rewrite it so that it\'s safe and reply with {{"safe": "N", "replacement_text": "detailed replacement text"}}. It should be safe enough to generate an image from. Do not discuss, just reply with a JSON object.`'
     response = llm(prompt)
     tries = 0
     while tries < max_tries:
@@ -178,9 +181,16 @@ def check_for_unsafe(text):
     
 for file_path in matching_files:
     with open(journal_dir + '/' + file_path, 'r') as file:
+        date = os.path.basename(file_path).replace(".txt", "")
+        output_file = f"{date}-modified.txt"
+        if output_file in done_entries:
+            continue
+
+        output_file_path = os.path.join(output_dir, output_file)
+
+
         start = time.time()
         content = file.read()
-        date = os.path.basename(file_path).replace(".txt", "")
         print(f"reading {os.path.basename(file_path)}")
 
         # Split content into paragraphs
@@ -198,7 +208,6 @@ for file_path in matching_files:
 
         # Save modified paragraphs as a text file
         modified_content = "\n\n".join(modified_paragraphs)
-        output_file_path = os.path.join(output_dir, f"{date}-modified.txt")
         with open(output_file_path, 'w') as output_file:
             output_file.write(modified_content)
 
