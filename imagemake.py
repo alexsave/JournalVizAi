@@ -21,7 +21,7 @@ modified_files = sorted(
     key=lambda x: os.path.getmtime(os.path.join(output_dir, x))
 )
 
-output = '2020.*-modified.txt'
+output = '2024.*-modified.txt'
 pattern = re.compile(output)
 
 # Filter files and directories that match the regex pattern
@@ -57,7 +57,7 @@ for file_path in modified_files:
         for i, prompt in enumerate(prompts):
             image_file = f"{file_path}{i}.png"
             # don't redo images, this should keep it much much faster on subsequent runs
-            if image_path in done_pics:
+            if image_file in done_pics:
                 continue
 
             image_path = os.path.join(aipics_dir, image_file)
